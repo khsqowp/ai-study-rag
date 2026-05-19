@@ -263,6 +263,91 @@
       /* ── Error ── */
       .error { color: #e53e3e; }
 
+      /* ── Reindex progress ── */
+      .reindex-box {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .reindex-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--label1);
+      }
+      .reindex-sub {
+        font-size: 13px;
+        color: var(--label3);
+        font-weight: 400;
+      }
+      .progress-track {
+        height: 6px;
+        background: var(--fill2);
+        border-radius: 100px;
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        border-radius: 100px;
+        background: var(--blue);
+        transition: width 0.3s ease;
+      }
+      .progress-fill.error { background: #e53e3e; }
+      .reindex-files {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .rfile {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .rfile-icon { flex-shrink: 0; font-size: 13px; margin-top: 1px; }
+      .rfile-name { color: var(--label2); word-break: break-all; }
+      .rfile-name.active { color: var(--label1); font-weight: 600; }
+      .rfile-name.done { color: var(--label3); }
+      .rfile-badge {
+        margin-left: auto;
+        flex-shrink: 0;
+        font-size: 11px;
+        color: var(--label4);
+        padding-left: 8px;
+      }
+      .rfile-error {
+        font-size: 12px;
+        color: #e53e3e;
+        margin-top: 2px;
+      }
+
+      /* ── Cache banner ── */
+      .cache-banner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        background: var(--fill1);
+        border-bottom: 1px solid var(--line1);
+        font-size: 12px;
+        color: var(--label3);
+      }
+      .cache-banner strong { color: var(--label2); font-weight: 600; }
+      .cache-refresh {
+        margin-left: auto;
+        background: none;
+        border: none;
+        font: inherit;
+        font-size: 12px;
+        color: var(--blue);
+        cursor: pointer;
+        padding: 0;
+      }
+      .cache-refresh:hover { text-decoration: underline; }
+
       /* ── Responsive ── */
       @media (max-width: 860px) {
         .grid { grid-template-columns: 1fr; }
@@ -369,13 +454,77 @@
           .join("");
       }
 
-      async function ask() {
+      // ── Cache helpers ────────────────────────────────────────────
+      const CACHE_KEY_PREFIX = "rag_cache_v1";
+      const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7일
+
+      function cacheKey(project, query) {
+        return `${CACHE_KEY_PREFIX}:${project}:${query.trim().toLowerCase()}`;
+      }
+
+      function cacheGet(project, query) {
+        try {
+          const raw = localStorage.getItem(cacheKey(project, query));
+          if (!raw) return null;
+          const entry = JSON.parse(raw);
+          if (Date.now() - entry.ts > CACHE_MAX_AGE_MS) {
+            localStorage.removeItem(cacheKey(project, query));
+            return null;
+          }
+          return entry;
+        } catch { return null; }
+      }
+
+      function cacheSet(project, query, answer, contexts) {
+        try {
+          localStorage.setItem(cacheKey(project, query), JSON.stringify({
+            answer, contexts, ts: Date.now(), query: query.trim(),
+          }));
+        } catch { /* storage full 무시 */ }
+      }
+
+      function fmtTs(ts) {
+        const d = new Date(ts);
+        return d.toLocaleDateString("ko-KR") + " " +
+          d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+      }
+
+      function showCachedAnswer(entry, query) {
+        const answerWrap = document.querySelector(".answer-wrap");
+        answerWrap.innerHTML =
+          `<div class="cache-banner">
+            <strong>캐시된 답변</strong>
+            <span>${fmtTs(entry.ts)}</span>
+            <button class="cache-refresh" data-query="${encodeURIComponent(query)}">다시 질문하기</button>
+          </div>
+          <div class="answer-wrap-inner" style="padding:20px">
+            <div class="answer">${marked.parse(entry.answer)}</div>
+          </div>`;
+        answerWrap.querySelector(".cache-refresh").addEventListener("click", (e) => {
+          ask(true);
+        });
+        renderContexts(entry.contexts || []);
+      }
+      // ─────────────────────────────────────────────────────────────
+
+      async function ask(forceRefresh = false) {
         const query = queryEl.value.trim();
         if (!query) return;
+
+        if (!forceRefresh) {
+          const cached = cacheGet(currentProject, query);
+          if (cached) {
+            showCachedAnswer(cached, query);
+            return;
+          }
+        }
+
         askBtn.disabled = true;
-        answerEl.innerHTML = '<span class="answer-placeholder">답변 생성 중...</span>';
+        const answerWrap = document.querySelector(".answer-wrap");
+        answerWrap.innerHTML = '<span class="answer-placeholder">답변 생성 중...</span>';
         contextsEl.innerHTML = '<div class="ctx-empty">검색 중...</div>';
         let fullText = "";
+        let lastContexts = [];
         try {
           const res = await fetch("/api/ask/stream", {
             method: "POST",
@@ -399,21 +548,103 @@
               if (!line.startsWith("data: ")) continue;
               const data = JSON.parse(line.slice(6));
               if (data.type === "contexts") {
-                renderContexts(data.contexts || []);
+                lastContexts = data.contexts || [];
+                renderContexts(lastContexts);
               } else if (data.type === "token") {
                 fullText += data.text;
-                answerEl.innerHTML = '<div class="answer">' + marked.parse(fullText) + "</div>";
+                answerWrap.innerHTML = '<div style="padding:20px"><div class="answer">' + marked.parse(fullText) + "</div></div>";
               } else if (data.type === "error") {
                 throw new Error(data.detail);
               }
             }
           }
+          if (fullText) cacheSet(currentProject, query, fullText, lastContexts);
         } catch (err) {
-          answerEl.innerHTML = `<span class="error">${err.message}</span>`;
+          answerWrap.innerHTML = `<span class="answer-placeholder error" style="padding:20px;display:block">${err.message}</span>`;
           contextsEl.innerHTML = '<div class="ctx-empty">오류로 검색 근거를 표시하지 못했습니다.</div>';
         } finally {
           askBtn.disabled = false;
         }
+      }
+
+      function renderReindexProgress(job) {
+        const total = job.total_files || 0;
+        const done = job.files_done || 0;
+        const failed = job.files_failed || 0;
+        const skipped = job.files_skipped || 0;
+        const finished = done + failed + skipped;
+        const pct = total > 0 ? Math.round((finished / total) * 100) : 0;
+        const isRunning = job.status === "running";
+        const hasError = failed > 0;
+
+        let headerText = "";
+        if (job.no_changes) {
+          headerText = "변경된 파일 없음";
+        } else if (job.no_files) {
+          headerText = "인덱싱할 파일 없음";
+        } else if (isRunning) {
+          headerText = total > 0
+            ? `재색인 중 ${finished}/${total}`
+            : "재색인 준비 중...";
+        } else if (job.ok) {
+          headerText = hasError
+            ? `재색인 완료 (오류 ${failed}건)`
+            : "재색인 완료";
+        } else {
+          headerText = "재색인 실패";
+        }
+
+        let subText = "";
+        if (!isRunning && !job.no_changes && !job.no_files) {
+          const parts = [];
+          if (done > 0) parts.push(`${done}개 파일`);
+          if (job.total_chunks > 0) parts.push(`${job.total_chunks.toLocaleString()} 청크`);
+          if (job.files_deleted > 0) parts.push(`${job.files_deleted}개 삭제`);
+          subText = parts.join(" · ");
+        } else if (isRunning && job.current_file) {
+          subText = job.current_file;
+        }
+
+        const files = job.files || [];
+        const filesHtml = files.map((f) => {
+          const icon =
+            f.status === "done" ? "✓" :
+            f.status === "error" ? "✗" :
+            f.status === "skipped" ? "—" :
+            f.status === "indexing" ? "⏳" : "○";
+          const nameClass =
+            f.status === "indexing" ? "rfile-name active" :
+            f.status === "done" ? "rfile-name done" :
+            "rfile-name";
+          const badge = f.status === "done" && f.chunks != null
+            ? `<span class="rfile-badge">${f.chunks.toLocaleString()} 청크</span>`
+            : "";
+          const errorLine = f.error
+            ? `<div class="rfile-error">${f.error}</div>`
+            : "";
+          return `<div class="rfile">
+            <span class="rfile-icon">${icon}</span>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:baseline">
+                <span class="${nameClass}">${f.filename}</span>${badge}
+              </div>${errorLine}
+            </div>
+          </div>`;
+        }).join("");
+
+        const fillClass = `progress-fill${hasError ? " error" : ""}`;
+
+        return `<div class="reindex-box">
+          <div class="reindex-header">
+            <span>${headerText}</span>
+            ${total > 0 && !job.no_changes ? `<span class="reindex-sub">${pct}%</span>` : ""}
+          </div>
+          ${total > 0 && !job.no_changes ? `
+            <div class="progress-track">
+              <div class="${fillClass}" style="width:${pct}%"></div>
+            </div>` : ""}
+          ${files.length > 0 ? `<div class="reindex-files">${filesHtml}</div>` : ""}
+        </div>`;
       }
 
       async function reindex() {
@@ -428,18 +659,15 @@
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "request failed");
           const jobId = data.job_id;
-          answerEl.innerHTML = '<span class="answer-placeholder">재색인 진행 중...</span>';
           while (true) {
-            await new Promise((r) => setTimeout(r, 2000));
             const statusRes = await fetch(`/api/reindex/status/${jobId}`);
-            const status = await statusRes.json();
-            if (status.status !== "running") {
-              answerEl.innerHTML = status.ok
-                ? `<span class="answer-placeholder">${status.stdout || "재색인 완료"}</span>`
-                : `<span class="error">${status.stderr}\n${status.stdout}</span>`;
+            const job = await statusRes.json();
+            answerEl.innerHTML = renderReindexProgress(job);
+            if (job.status !== "running") {
               await refreshStatus();
               break;
             }
+            await new Promise((r) => setTimeout(r, 800));
           }
         } catch (err) {
           answerEl.innerHTML = `<span class="error">${err.message}</span>`;
@@ -449,7 +677,10 @@
       }
 
       queryEl.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ask();
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          ask();
+        }
       });
       askBtn.addEventListener("click", ask);
       reindexBtn.addEventListener("click", reindex);
