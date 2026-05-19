@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Sandbox RAG</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/packages/pretendard/dist/web/static/pretendard.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+      :root {
+        --blue: #3182f6;
+        --blue-press: #1b64da;
+        --bg: #f2f4f6;
+        --white: #ffffff;
+        --label1: #191f28;
+        --label2: #4e5968;
+        --label3: #8b95a1;
+        --label4: #adb5bd;
+        --line1: #e5e8eb;
+        --fill1: #f2f4f6;
+        --fill2: #e5e8eb;
+      }
+      *, *::before, *::after { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--label1);
+        font-family: "Pretendard Variable", Pretendard, -apple-system,
+          BlinkMacSystemFont, system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ── App bar ── */
+      .appbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: var(--white);
+        border-bottom: 1px solid var(--line1);
+      }
+      .appbar-inner {
+        max-width: 1160px;
+        margin: 0 auto;
+        padding: 0 24px;
+        height: 56px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .appbar-title {
+        font-size: 17px;
+        font-weight: 700;
+        color: var(--label1);
+        margin: 0;
+      }
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        background: var(--fill1);
+        border-radius: 100px;
+        padding: 5px 12px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--label2);
+        white-space: nowrap;
+      }
+
+      /* ── Layout ── */
+      .page {
+        max-width: 1160px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 16px;
+        align-items: start;
+      }
+
+      /* ── Card ── */
+      .card {
+        background: var(--white);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+
+      /* ── Composer ── */
+      .composer {
+        padding: 20px;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--label3);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+      }
+
+      /* ── Project chips ── */
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 16px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 14px;
+        border-radius: 100px;
+        border: 1.5px solid var(--line1);
+        background: var(--white);
+        color: var(--label2);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.1s, border-color 0.1s, color 0.1s;
+      }
+      .chip:hover { background: var(--fill1); }
+      .chip.active {
+        background: var(--blue);
+        border-color: var(--blue);
+        color: var(--white);
+      }
+
+      /* ── Textarea ── */
+      .textarea-wrap {
+        background: var(--fill1);
+        border-radius: 12px;
+      }
+      textarea {
+        display: block;
+        width: 100%;
+        min-height: 96px;
+        resize: vertical;
+        border: 0;
+        background: transparent;
+        padding: 14px;
+        font: inherit;
+        font-size: 15px;
+        color: var(--label1);
+        line-height: 1.6;
+        outline: none;
+      }
+      textarea::placeholder { color: var(--label4); }
+
+      /* ── Action buttons ── */
+      .actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 12px;
+      }
+      .btn {
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 18px;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.1s;
+      }
+      .btn-primary { background: var(--blue); color: var(--white); }
+      .btn-primary:hover { background: var(--blue-press); }
+      .btn-secondary { background: var(--fill1); color: var(--label2); }
+      .btn-secondary:hover { background: var(--fill2); }
+      .btn:disabled { opacity: 0.55; cursor: wait; }
+
+      /* ── Answer ── */
+      .answer-wrap {
+        padding: 20px;
+        min-height: 200px;
+        line-height: 1.7;
+      }
+      .answer-placeholder { color: var(--label4); font-size: 14px; }
+      .answer h1, .answer h2, .answer h3 { margin: 0.75em 0 0.35em; line-height: 1.35; }
+      .answer h1 { font-size: 1.1em; font-weight: 700; }
+      .answer h2 { font-size: 1.05em; font-weight: 700; }
+      .answer h3 { font-size: 1em; font-weight: 600; }
+      .answer p { margin: 0 0 0.6em; }
+      .answer p:last-child { margin-bottom: 0; }
+      .answer ul, .answer ol { margin: 0 0 0.6em; padding-left: 1.4em; }
+      .answer li { margin-bottom: 0.25em; }
+      .answer code {
+        background: var(--fill1);
+        border-radius: 4px;
+        padding: 0.1em 0.35em;
+        font-size: 0.88em;
+      }
+      .answer pre {
+        background: var(--fill1);
+        border-radius: 10px;
+        padding: 14px 16px;
+        overflow-x: auto;
+        margin: 0 0 0.6em;
+      }
+      .answer pre code { background: none; padding: 0; }
+      .answer blockquote {
+        border-left: 3px solid var(--line1);
+        margin: 0 0 0.6em;
+        padding-left: 1em;
+        color: var(--label3);
+      }
+      .answer strong { font-weight: 700; }
+
+      /* ── Sidebar ── */
+      .sidebar-head {
+        padding: 16px 20px 14px;
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--label1);
+      }
+      .sidebar-divider {
+        height: 1px;
+        background: var(--line1);
+        margin: 0 20px;
+      }
+      .context-list {
+        padding: 4px 20px 20px;
+      }
+      .ctx-item {
+        padding: 14px 0;
+        border-top: 1px solid var(--line1);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .ctx-item:first-child { border-top: 0; }
+      .ctx-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-weight: 700;
+        font-size: 12px;
+        color: var(--blue);
+      }
+      .ctx-source {
+        margin-top: 3px;
+        color: var(--label3);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .ctx-text {
+        margin-top: 6px;
+        color: var(--label2);
+      }
+      .ctx-empty {
+        padding: 16px 0;
+        color: var(--label4);
+        font-size: 13px;
+      }
+
+      /* ── Error ── */
+      .error { color: #e53e3e; }
+
+      /* ── Responsive ── */
+      @media (max-width: 860px) {
+        .grid { grid-template-columns: 1fr; }
+        .page { padding: 16px; }
+        .appbar-inner { padding: 0 16px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="appbar">
+      <div class="appbar-inner">
+        <h1 class="appbar-title">AI Sandbox RAG</h1>
+        <div class="status-chip" id="status">로딩 중</div>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="grid">
+        <section>
+          <div class="card composer">
+            <div class="section-label">프로젝트</div>
+            <div class="chips" id="chips"></div>
+            <div class="textarea-wrap">
+              <textarea id="query" placeholder="PDF 자료에 대해 질문하세요" rows="4"></textarea>
+            </div>
+            <div class="actions">
+              <button class="btn btn-secondary" id="reindex">재색인</button>
+              <button class="btn btn-primary" id="ask">질문하기</button>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 16px;">
+            <div class="answer-wrap" id="answer">
+              <span class="answer-placeholder">답변이 여기에 표시됩니다.</span>
+            </div>
+          </div>
+        </section>
+        <aside class="card">
+          <div class="sidebar-head">검색 근거</div>
+          <div class="sidebar-divider"></div>
+          <div class="context-list" id="contexts">
+            <div class="ctx-empty">아직 검색 결과가 없습니다.</div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <script>
+      const statusEl = document.querySelector("#status");
+      const queryEl = document.querySelector("#query");
+      const chipsEl = document.querySelector("#chips");
+      const answerEl = document.querySelector("#answer");
+      const contextsEl = document.querySelector("#contexts");
+      const askBtn = document.querySelector("#ask");
+      const reindexBtn = document.querySelector("#reindex");
+
+      let currentProject = "";
+
+      function setProject(name) {
+        currentProject = name;
+        chipsEl.querySelectorAll(".chip").forEach((c) => {
+          c.classList.toggle("active", c.dataset.project === name);
+        });
+        refreshStatus();
+      }
+
+      async function refreshStatus() {
+        const project = currentProject || "inbox";
+        try {
+          const res = await fetch(`/api/status?project=${encodeURIComponent(project)}`);
+          const data = await res.json();
+          if (data.projects && !chipsEl.children.length) {
+            chipsEl.innerHTML = data.projects
+              .map(
+                (name) =>
+                  `<button class="chip${name === data.project ? " active" : ""}" data-project="${name}">${name}</button>`
+              )
+              .join("");
+            currentProject = data.project;
+            chipsEl.querySelectorAll(".chip").forEach((c) => {
+              c.addEventListener("click", () => setProject(c.dataset.project));
+            });
+          }
+          statusEl.textContent = `${data.project} · ${data.points_count} chunks`;
+        } catch {
+          statusEl.textContent = "unavailable";
+        }
+      }
+
+      function renderContexts(contexts) {
+        if (!contexts.length) {
+          contextsEl.innerHTML = '<div class="ctx-empty">검색 근거가 없습니다.</div>';
+          return;
+        }
+        contextsEl.innerHTML = contexts
+          .map(
+            (item) => `
+          <div class="ctx-item">
+            <span class="ctx-badge">[${item.id}] ${item.score.toFixed(4)}</span>
+            <div class="ctx-source">${item.source} · ${item.locator || "page " + item.page}</div>
+            <div class="ctx-text">${item.text.slice(0, 260)}</div>
+          </div>
+        `
+          )
+          .join("");
+      }
+
+      async function ask() {
+        const query = queryEl.value.trim();
+        if (!query) return;
+        askBtn.disabled = true;
+        answerEl.innerHTML = '<span class="answer-placeholder">답변 생성 중...</span>';
+        contextsEl.innerHTML = '<div class="ctx-empty">검색 중...</div>';
+        let fullText = "";
+        try {
+          const res = await fetch("/api/ask/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query, project: currentProject, limit: 12, show_context: true }),
+          });
+          if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.detail || "request failed");
+          }
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop();
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "contexts") {
+                renderContexts(data.contexts || []);
+              } else if (data.type === "token") {
+                fullText += data.text;
+                answerEl.innerHTML = '<div class="answer">' + marked.parse(fullText) + "</div>";
+              } else if (data.type === "error") {
+                throw new Error(data.detail);
+              }
+            }
+          }
+        } catch (err) {
+          answerEl.innerHTML = `<span class="error">${err.message}</span>`;
+          contextsEl.innerHTML = '<div class="ctx-empty">오류로 검색 근거를 표시하지 못했습니다.</div>';
+        } finally {
+          askBtn.disabled = false;
+        }
+      }
+
+      async function reindex() {
+        reindexBtn.disabled = true;
+        answerEl.innerHTML = '<span class="answer-placeholder">재색인 시작 중...</span>';
+        try {
+          const res = await fetch("/api/reindex", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ project: currentProject, recreate: false }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "request failed");
+          const jobId = data.job_id;
+          answerEl.innerHTML = '<span class="answer-placeholder">재색인 진행 중...</span>';
+          while (true) {
+            await new Promise((r) => setTimeout(r, 2000));
+            const statusRes = await fetch(`/api/reindex/status/${jobId}`);
+            const status = await statusRes.json();
+            if (status.status !== "running") {
+              answerEl.innerHTML = status.ok
+                ? `<span class="answer-placeholder">${status.stdout || "재색인 완료"}</span>`
+                : `<span class="error">${status.stderr}\n${status.stdout}</span>`;
+              await refreshStatus();
+              break;
+            }
+          }
+        } catch (err) {
+          answerEl.innerHTML = `<span class="error">${err.message}</span>`;
+        } finally {
+          reindexBtn.disabled = false;
+        }
+      }
+
+      queryEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ask();
+      });
+      askBtn.addEventListener("click", ask);
+      reindexBtn.addEventListener("click", reindex);
+      refreshStatus().catch(() => {
+        statusEl.textContent = "unavailable";
+      });
+    </script>
+  </body>
+</html>

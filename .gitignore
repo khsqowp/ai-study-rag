@@ -1,0 +1,41 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Personal/local agent settings
+.claude/
+.codex/
+
+# Source documents and generated workspaces
+data/
+workspace/
+
+# Generated caches and model downloads
+cache/
+vectordb/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Logs and runtime files
+*.log
+logs/
+tmp/
+*.tmp
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Docker/local overrides
+docker-compose.override.yml

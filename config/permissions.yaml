@@ -1,0 +1,16 @@
+root: /sandbox
+read_only:
+  - /sandbox/data
+  - /sandbox/config
+write_allowed:
+  - /sandbox/vectordb
+  - /sandbox/cache
+  - /sandbox/workspace
+deny:
+  - /
+  - /Users
+  - /Volumes
+  - /Applications
+  - /System
+  - /private
+

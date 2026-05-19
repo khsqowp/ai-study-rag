@@ -1,0 +1,23 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/sandbox/cache/huggingface \
+    FASTEMBED_CACHE_PATH=/sandbox/cache/fastembed
+
+WORKDIR /sandbox
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      libgomp1 \
+      ffmpeg \
+      libreoffice \
+      tesseract-ocr \
+      tesseract-ocr-eng \
+      tesseract-ocr-kor \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.rag.txt /tmp/requirements.rag.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.rag.txt
+
+CMD ["python", "/sandbox/scripts/ask.py", "--query", "색인 상태를 확인해줘"]

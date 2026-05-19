@@ -1,0 +1,17 @@
+fastembed==0.7.3
+fastapi==0.127.0
+faster-whisper==1.2.1
+kiwipiepy==0.18.1
+olefile==0.47
+openpyxl==3.1.5
+pillow==11.3.0
+pymupdf==1.26.3
+pytesseract==0.3.13
+python-docx==1.1.2
+python-pptx==1.0.2
+qdrant-client==1.15.1
+requests==2.34.2
+tqdm==4.67.1
+uvicorn==0.40.0
+watchdog==6.0.0
+flashrank
