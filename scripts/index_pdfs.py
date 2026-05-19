@@ -30,6 +30,12 @@ from tqdm import tqdm
 
 DATA_ROOT = Path("/sandbox/data").resolve()
 CACHE_ROOT = Path("/sandbox/cache").resolve()
+
+
+def _emit(event: dict) -> None:
+    """Write a single JSON-line progress event to stdout for the web layer to consume."""
+    import sys
+    print(json.dumps(event, ensure_ascii=False), flush=True, file=sys.stdout)
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".md", ".txt", ".hwp", ".hwpx"}
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg", ".opus"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
@@ -754,7 +760,7 @@ def main() -> None:
 
     files = iter_supported_files(project_dir)
     if not files:
-        print(f"No supported files found in {project_dir}")
+        _emit({"event": "no_files", "project": args.project})
         return
 
     previous = load_manifest(args.project)
@@ -763,8 +769,16 @@ def main() -> None:
     changed = [path for path in files if args.recreate or previous_files.get(safe_source_path(path)) != current_files[safe_source_path(path)]]
     deleted = sorted(set(previous_files) - set(current_files))
 
-    if args.skip_unchanged and not changed and not deleted:
-        print(f"No document changes detected for project '{args.project}'.")
+    # Check collection schema before the skip-unchanged early exit so that a
+    # schema migration (old → hybrid named-vector format) is never skipped.
+    qdrant_client_early = QdrantClient(url=qdrant_url)
+    schema_needs_migration = (
+        qdrant_client_early.collection_exists(collection)
+        and not isinstance(qdrant_client_early.get_collection(collection).config.params.vectors, dict)
+    )
+
+    if args.skip_unchanged and not changed and not deleted and not schema_needs_migration:
+        _emit({"event": "no_changes", "project": args.project})
         return
 
     embedder = TextEmbedding(model_name=model_name)
@@ -772,31 +786,67 @@ def main() -> None:
     probe = next(embedder.embed(["dimension probe"]))
     vector_size = len(probe)
 
-    client = QdrantClient(url=qdrant_url)
+    client = qdrant_client_early
     needs_full_reindex = ensure_collection(client, collection, vector_size, args.recreate)
     if needs_full_reindex:
-        print("[migration] Collection schema migrated to hybrid format; forcing full reindex.")
+        _emit({"event": "migration", "message": "스키마 마이그레이션 (→ hybrid), 전체 재색인 시작"})
         changed = files
         deleted = []
 
-    for source in deleted:
+    _emit({
+        "event": "start",
+        "total_files": len(changed),
+        "total_deleted": len(deleted),
+        "project": args.project,
+    })
+
+    for i, source in enumerate(deleted, 1):
+        _emit({"event": "delete", "index": i, "total": len(deleted), "source": source})
         delete_source(client, collection, source)
 
     total_chunks = 0
-    indexed_files = 0
-    for path in changed:
+    files_done = 0
+    files_failed = 0
+    files_skipped = 0
+    total_files = len(changed)
+
+    for file_index, path in enumerate(changed, 1):
         source = safe_source_path(path)
+        filename = path.name
+        _emit({
+            "event": "file_start",
+            "file_index": file_index,
+            "total_files": total_files,
+            "filename": filename,
+            "source": source,
+        })
         delete_source(client, collection, source)
         try:
             chunks = extract_chunks(path, chunk_size, overlap, min_chunk_chars, args.project)
         except Exception as exc:
-            print(f"Failed to extract {source}: {exc}")
+            files_failed += 1
+            _emit({
+                "event": "file_error",
+                "file_index": file_index,
+                "total_files": total_files,
+                "filename": filename,
+                "source": source,
+                "error": str(exc),
+            })
             continue
         texts = [chunk["text"] for chunk in chunks]
         if not texts:
-            print(f"No text extracted from {source}")
+            files_skipped += 1
+            _emit({
+                "event": "file_skip",
+                "file_index": file_index,
+                "total_files": total_files,
+                "filename": filename,
+                "source": source,
+                "reason": "텍스트 추출 결과 없음",
+            })
             continue
-        vectors = list(tqdm(embedder.embed(texts), total=len(texts), desc=path.name))
+        vectors = list(tqdm(embedder.embed(texts), total=len(texts), desc=filename, file=__import__("sys").stderr))
         sparse_vectors = list(sparse_embedder.embed(texts))
         points = [
             PointStruct(
@@ -814,13 +864,27 @@ def main() -> None:
         ]
         client.upsert(collection_name=collection, points=points)
         total_chunks += len(points)
-        indexed_files += 1
+        files_done += 1
+        _emit({
+            "event": "file_done",
+            "file_index": file_index,
+            "total_files": total_files,
+            "filename": filename,
+            "source": source,
+            "chunks": len(points),
+        })
 
     save_manifest(args.project, {"files": current_files})
-    print(
-        f"Project '{args.project}' collection '{collection}': "
-        f"{indexed_files} changed files indexed, {len(deleted)} deleted files removed, {total_chunks} chunks upserted."
-    )
+    _emit({
+        "event": "done",
+        "project": args.project,
+        "files_done": files_done,
+        "files_failed": files_failed,
+        "files_skipped": files_skipped,
+        "files_deleted": len(deleted),
+        "total_chunks": total_chunks,
+        "ok": files_failed == 0,
+    })
 
 
 if __name__ == "__main__":
