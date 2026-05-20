@@ -414,21 +414,29 @@
       }
 
       async function refreshStatus() {
-        const project = currentProject || "inbox";
+        const project = currentProject || "";
         try {
           const res = await fetch(`/api/status?project=${encodeURIComponent(project)}`);
           const data = await res.json();
-          if (data.projects && !chipsEl.children.length) {
-            chipsEl.innerHTML = data.projects
-              .map(
-                (name) =>
-                  `<button class="chip${name === data.project ? " active" : ""}" data-project="${name}">${name}</button>`
-              )
-              .join("");
-            currentProject = data.project;
-            chipsEl.querySelectorAll(".chip").forEach((c) => {
-              c.addEventListener("click", () => setProject(c.dataset.project));
-            });
+          if (data.projects) {
+            const prev = Array.from(chipsEl.querySelectorAll(".chip")).map((c) => c.dataset.project).join(",");
+            const next = data.projects.join(",");
+            if (prev !== next) {
+              chipsEl.innerHTML = data.projects
+                .map(
+                  (name) =>
+                    `<button class="chip${name === data.project ? " active" : ""}" data-project="${name}">${name}</button>`
+                )
+                .join("");
+              chipsEl.querySelectorAll(".chip").forEach((c) => {
+                c.addEventListener("click", () => setProject(c.dataset.project));
+              });
+            } else {
+              chipsEl.querySelectorAll(".chip").forEach((c) => {
+                c.classList.toggle("active", c.dataset.project === data.project);
+              });
+            }
+            if (!currentProject) currentProject = data.project;
           }
           statusEl.textContent = `${data.project} · ${data.points_count} chunks`;
         } catch {

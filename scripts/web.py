@@ -50,8 +50,12 @@ def index() -> str:
 
 
 @app.get("/api/status")
-def status(project: str = "inbox") -> dict:
-    project = ensure_project(project)
+def status(project: str = "") -> dict:
+    all_projects = project_names()
+    if not all_projects:
+        return {"project": None, "collection": None, "points_count": 0, "status": "no_projects", "projects": []}
+    if not project or project not in all_projects:
+        project = all_projects[0]
     collection = collection_for_project(project)
     client = QdrantClient(url=os.environ["QDRANT_URL"])
     if not client.collection_exists(collection):
@@ -60,7 +64,7 @@ def status(project: str = "inbox") -> dict:
             "collection": collection,
             "points_count": 0,
             "status": "missing",
-            "projects": project_names(),
+            "projects": all_projects,
         }
     collection_info = client.get_collection(collection)
     return {
@@ -68,7 +72,7 @@ def status(project: str = "inbox") -> dict:
         "collection": collection,
         "points_count": collection_info.points_count,
         "status": str(collection_info.status),
-        "projects": project_names(),
+        "projects": all_projects,
     }
 
 

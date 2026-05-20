@@ -81,21 +81,46 @@ def _index_worker() -> None:
         _index_queue.task_done()
 
 
+_watched_projects: set[str] = set()
+_watched_lock = threading.Lock()
+
+
+def _watch_project(observer: PollingObserver, project: str) -> None:
+    project_dir = DATA_ROOT / project
+    if not project_dir.is_dir():
+        return
+    with _watched_lock:
+        if project in _watched_projects:
+            return
+        _watched_projects.add(project)
+    handler = ProjectEventHandler(project)
+    observer.schedule(handler, str(project_dir), recursive=True)
+    print(f"[watcher] watching {project_dir}", flush=True)
+    _index_queue.put(project)
+
+
+def _new_project_scanner(observer: PollingObserver) -> None:
+    while True:
+        time.sleep(60)
+        for project in project_names():
+            with _watched_lock:
+                already = project in _watched_projects
+            if not already:
+                print(f"[watcher] new project detected: {project!r}", flush=True)
+                _watch_project(observer, project)
+
+
 def main() -> None:
     observer = PollingObserver(timeout=10)
     for project in project_names():
-        project_dir = DATA_ROOT / project
-        if not project_dir.is_dir():
-            print(f"[watcher] skipping missing dir {project_dir}", flush=True)
-            continue
-        handler = ProjectEventHandler(project)
-        observer.schedule(handler, str(project_dir), recursive=True)
-        print(f"[watcher] watching {project_dir}", flush=True)
+        _watch_project(observer, project)
 
     threading.Thread(target=_debounce_worker, daemon=True).start()
     threading.Thread(target=_index_worker, daemon=True).start()
 
     observer.start()
+    threading.Thread(target=_new_project_scanner, args=(observer,), daemon=True).start()
+
     print("[watcher] started", flush=True)
     try:
         while True:
