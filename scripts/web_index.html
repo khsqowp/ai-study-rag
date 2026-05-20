@@ -348,6 +348,53 @@
       }
       .cache-refresh:hover { text-decoration: underline; }
 
+      /* ── Web search toggle ── */
+      .web-search-label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--label2);
+        cursor: pointer;
+        user-select: none;
+        margin-right: auto;
+      }
+      .web-search-label input { cursor: pointer; accent-color: var(--blue); }
+      .web-search-label.active { color: var(--blue); font-weight: 600; }
+
+      /* ── Web sources ── */
+      .web-sources {
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line1);
+      }
+      .web-sources-label {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+        color: var(--label4);
+        margin-bottom: 8px;
+      }
+      .web-source {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+      .web-source a {
+        color: var(--blue);
+        text-decoration: none;
+        word-break: break-all;
+      }
+      .web-source a:hover { text-decoration: underline; }
+      .web-source-num {
+        flex-shrink: 0;
+        font-size: 11px;
+        color: var(--label4);
+      }
+
       /* ── Responsive ── */
       @media (max-width: 860px) {
         .grid { grid-template-columns: 1fr; }
@@ -375,6 +422,9 @@
             </div>
             <div class="actions">
               <button class="btn btn-secondary" id="reindex">재색인</button>
+              <label class="web-search-label" id="webSearchLabel">
+                <input type="checkbox" id="webSearch"> 🌐 웹 검색
+              </label>
               <button class="btn btn-primary" id="ask">질문하기</button>
             </div>
           </div>
@@ -402,6 +452,11 @@
       const contextsEl = document.querySelector("#contexts");
       const askBtn = document.querySelector("#ask");
       const reindexBtn = document.querySelector("#reindex");
+      const webSearchEl = document.querySelector("#webSearch");
+      const webSearchLabel = document.querySelector("#webSearchLabel");
+      webSearchEl.addEventListener("change", () => {
+        webSearchLabel.classList.toggle("active", webSearchEl.checked);
+      });
 
       let currentProject = "";
 
@@ -442,6 +497,19 @@
         } catch {
           statusEl.textContent = "unavailable";
         }
+      }
+
+      function renderWebSources(sources, answerWrap) {
+        const existing = answerWrap.querySelector(".web-sources");
+        if (existing) existing.remove();
+        if (!sources.length) return;
+        const el = document.createElement("div");
+        el.className = "web-sources";
+        el.innerHTML = `<div class="web-sources-label">🌐 웹 검색 출처</div>` +
+          sources.map((s, i) =>
+            `<div class="web-source"><span class="web-source-num">[W${i + 1}]</span><a href="${s.uri}" target="_blank" rel="noopener">${s.title || s.uri}</a></div>`
+          ).join("");
+        answerWrap.querySelector("div")?.appendChild(el);
       }
 
       function renderContexts(contexts) {
@@ -528,16 +596,18 @@
         }
 
         askBtn.disabled = true;
+        const useWebSearch = webSearchEl.checked;
         const answerWrap = document.querySelector(".answer-wrap");
         answerWrap.innerHTML = '<span class="answer-placeholder">답변 생성 중...</span>';
         contextsEl.innerHTML = '<div class="ctx-empty">검색 중...</div>';
         let fullText = "";
         let lastContexts = [];
+        let lastWebSources = [];
         try {
           const res = await fetch("/api/ask/stream", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query, project: currentProject, limit: 12, show_context: true }),
+            body: JSON.stringify({ query, project: currentProject, limit: 12, show_context: true, web_search: useWebSearch }),
           });
           if (!res.ok) {
             const data = await res.json();
@@ -561,6 +631,9 @@
               } else if (data.type === "token") {
                 fullText += data.text;
                 answerWrap.innerHTML = '<div style="padding:20px"><div class="answer">' + marked.parse(fullText) + "</div></div>";
+              } else if (data.type === "web_sources") {
+                lastWebSources = data.sources || [];
+                renderWebSources(lastWebSources, answerWrap);
               } else if (data.type === "error") {
                 throw new Error(data.detail);
               }

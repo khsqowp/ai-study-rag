@@ -26,6 +26,7 @@ class AskRequest(BaseModel):
     project: str = "inbox"
     limit: int = 12
     show_context: bool = True
+    web_search: bool = False
 
 
 class ReindexRequest(BaseModel):
@@ -87,15 +88,16 @@ def ask(request: AskRequest) -> dict:
     if not contexts:
         raise HTTPException(status_code=404, detail="No relevant context found")
 
-    prompt = build_prompt(query, contexts)
+    prompt = build_prompt(query, contexts, request.web_search)
     try:
-        answer = call_gemini(prompt)
+        answer, web_sources = call_gemini(prompt, request.web_search)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return {
         "answer": answer,
         "contexts": contexts if request.show_context else [],
+        "web_sources": web_sources,
     }
 
 
@@ -110,13 +112,16 @@ def ask_stream(request: AskRequest) -> StreamingResponse:
     if not contexts:
         raise HTTPException(status_code=404, detail="No relevant context found")
 
-    prompt = build_prompt(query, contexts)
+    prompt = build_prompt(query, contexts, request.web_search)
 
     def generate():
         yield f"data: {json.dumps({'type': 'contexts', 'contexts': contexts})}\n\n"
         try:
-            for chunk in stream_gemini(prompt):
-                yield f"data: {json.dumps({'type': 'token', 'text': chunk})}\n\n"
+            for event in stream_gemini(prompt, request.web_search):
+                if event["type"] == "token":
+                    yield f"data: {json.dumps({'type': 'token', 'text': event['text']})}\n\n"
+                elif event["type"] == "grounding":
+                    yield f"data: {json.dumps({'type': 'web_sources', 'sources': event['sources']})}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
         yield f"data: {json.dumps({'type': 'done'})}\n\n"

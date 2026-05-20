@@ -107,7 +107,7 @@ def retrieve(query: str, limit: int, candidates: int, project: str | None = None
     return contexts
 
 
-def build_prompt(query: str, contexts: list[dict]) -> str:
+def build_prompt(query: str, contexts: list[dict], web_search: bool = False) -> str:
     context_text = "\n\n".join(
         (
             f"[{item['id']}] source={item['source']} location={item.get('locator') or item.get('page')}\n"
@@ -115,7 +115,17 @@ def build_prompt(query: str, contexts: list[dict]) -> str:
         )
         for item in contexts
     )
-    return f"""너는 사용자의 로컬 PDF 자료만 근거로 답하는 RAG assistant다.
+    if web_search:
+        system = """너는 로컬 문서와 웹 검색을 함께 활용해 답하는 RAG assistant다.
+
+규칙:
+- 아래 CONTEXT(로컬 문서)와 Google 웹 검색 결과를 모두 활용하라.
+- 로컬 문서를 인용할 때는 [출처번호]를 붙여라. 웹 출처는 Gemini가 자동 인용한다.
+- 답변은 한국어로 하라.
+- 핵심을 먼저 말하고, 필요하면 짧은 bullet로 정리하라.
+- 마지막에 "로컬 문서 출처" 섹션을 만들고 파일명과 페이지를 나열하라."""
+    else:
+        system = """너는 사용자의 로컬 PDF 자료만 근거로 답하는 RAG assistant다.
 
 규칙:
 - 아래 CONTEXT에 있는 내용만 근거로 답하라.
@@ -123,70 +133,84 @@ def build_prompt(query: str, contexts: list[dict]) -> str:
 - 답변은 한국어로 하라.
 - 핵심을 먼저 말하고, 필요하면 짧은 bullet로 정리하라.
 - 문장마다 가능한 한 [출처번호]를 붙여라.
-- 마지막에 "출처" 섹션을 만들고 파일명과 페이지를 나열하라.
+- 마지막에 "출처" 섹션을 만들고 파일명과 페이지를 나열하라."""
+    return f"""{system}
 
 QUESTION:
 {query}
 
-CONTEXT:
+CONTEXT (로컬 문서):
 {context_text}
 """
 
 
-def call_gemini(prompt: str) -> str:
+def _extract_grounding_sources(candidate: dict) -> list[dict]:
+    sources = []
+    for chunk in candidate.get("groundingMetadata", {}).get("groundingChunks", []):
+        web = chunk.get("web", {})
+        if web.get("uri"):
+            sources.append({"title": web.get("title", ""), "uri": web["uri"]})
+    return sources
+
+
+def call_gemini(prompt: str, web_search: bool = False) -> tuple[str, list[dict]]:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set")
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    body: dict = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "topP": 0.9},
+    }
+    if web_search:
+        body["tools"] = [{"googleSearch": {}}]
+
     response = requests.post(
         url,
-        headers={
-            "x-goog-api-key": api_key,
-            "Content-Type": "application/json",
-        },
-        json={
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": prompt}],
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.2,
-                "topP": 0.9,
-            },
-        },
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json=body,
         timeout=120,
     )
     if response.status_code >= 400:
         raise RuntimeError(f"Gemini API error {response.status_code}: {response.text}")
     data = response.json()
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        candidate = data["candidates"][0]
+        answer = candidate["content"]["parts"][0]["text"]
+        web_sources = _extract_grounding_sources(candidate) if web_search else []
+        return answer, web_sources
     except (KeyError, IndexError) as exc:
         raise RuntimeError(f"Unexpected Gemini response: {data}") from exc
 
 
-def stream_gemini(prompt: str) -> Iterator[str]:
+def stream_gemini(prompt: str, web_search: bool = False) -> Iterator[dict]:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse"
+    body: dict = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "topP": 0.9},
+    }
+    if web_search:
+        body["tools"] = [{"googleSearch": {}}]
+
     response = requests.post(
         url,
         headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-        json={
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.2, "topP": 0.9},
-        },
+        json=body,
         stream=True,
         timeout=300,
     )
     if response.status_code >= 400:
         raise RuntimeError(f"Gemini API error {response.status_code}: {response.text[:500]}")
+
+    all_sources: list[dict] = []
+    seen_uris: set[str] = set()
+
     for raw_line in response.iter_lines():
         if not raw_line:
             continue
@@ -195,11 +219,23 @@ def stream_gemini(prompt: str) -> Iterator[str]:
             continue
         try:
             data = json.loads(line[6:])
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            if text:
-                yield text
+            candidate = data["candidates"][0]
+            try:
+                text = candidate["content"]["parts"][0]["text"]
+                if text:
+                    yield {"type": "token", "text": text}
+            except (KeyError, IndexError):
+                pass
+            if web_search:
+                for src in _extract_grounding_sources(candidate):
+                    if src["uri"] not in seen_uris:
+                        seen_uris.add(src["uri"])
+                        all_sources.append(src)
         except (KeyError, IndexError, json.JSONDecodeError):
             pass
+
+    if web_search and all_sources:
+        yield {"type": "grounding", "sources": all_sources}
 
 
 def print_contexts(contexts: list[dict]) -> None:
