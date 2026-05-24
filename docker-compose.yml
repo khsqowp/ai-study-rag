@@ -52,7 +52,7 @@ services:
       STT_SIMILARITY_THRESHOLD: ${STT_SIMILARITY_THRESHOLD:-0.6}
       PROJECT_NAME: ${PROJECT_NAME:-inbox}
     volumes:
-      - ./data:/sandbox/data:ro
+      - ./data:/sandbox/data
       - ./config:/sandbox/config:ro
       - ./vectordb:/sandbox/vectordb
       - ./cache:/sandbox/cache

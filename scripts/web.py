@@ -1,17 +1,18 @@
 import json
 import os
+import shutil
 import subprocess
 import threading
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 
 from answer import build_prompt, call_gemini, retrieve, stream_gemini
-from index_pdfs import collection_for_project
+from index_pdfs import SUPPORTED_EXTENSIONS, collection_for_project
 
 
 _jobs: dict[str, dict] = {}
@@ -34,8 +35,57 @@ class ReindexRequest(BaseModel):
     recreate: bool = True
 
 
+class ProjectCreateRequest(BaseModel):
+    name: str
+
+
+class FolderCreateRequest(BaseModel):
+    project: str
+    path: str = ""
+    name: str
+
+
+DATA_ROOT = Path("/sandbox/data")
+
+
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def _safe_name(name: str) -> str:
+    cleaned = name.strip()
+    if not cleaned or cleaned in {".", ".."} or "/" in cleaned or "\\" in cleaned:
+        raise HTTPException(status_code=400, detail="Invalid name")
+    return cleaned
+
+
+def _safe_project_path(project: str, relative_path: str = "") -> Path:
+    project = _safe_name(project)
+    root = DATA_ROOT.resolve()
+    base = (root / project).resolve()
+    if not _is_relative_to(base, root):
+        raise HTTPException(status_code=400, detail="Invalid project")
+    rel = relative_path.strip().strip("/")
+    target = (base / rel).resolve() if rel else base
+    if not _is_relative_to(target, base):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return target
+
+
+def _relative_to_project(project: str, path: Path) -> str:
+    base = (DATA_ROOT.resolve() / project).resolve()
+    rel = path.resolve().relative_to(base)
+    return "" if str(rel) == "." else str(rel)
+
+
 def project_names() -> list[str]:
-    root = Path("/sandbox/data")
+    root = DATA_ROOT
+    if not root.exists():
+        return []
     return sorted(path.name for path in root.iterdir() if path.is_dir())
 
 
@@ -75,6 +125,87 @@ def status(project: str = "") -> dict:
         "status": str(collection_info.status),
         "projects": all_projects,
     }
+
+
+@app.get("/api/files")
+def list_files(project: str, path: str = "") -> dict:
+    project = ensure_project(project)
+    target = _safe_project_path(project, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="Path is not a directory")
+
+    items = []
+    for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        stat = child.stat()
+        items.append(
+            {
+                "name": child.name,
+                "path": _relative_to_project(project, child),
+                "type": "directory" if child.is_dir() else "file",
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+                "supported": child.is_dir() or child.suffix.lower() in SUPPORTED_EXTENSIONS,
+            }
+        )
+    return {
+        "project": project,
+        "path": _relative_to_project(project, target),
+        "items": items,
+    }
+
+
+@app.post("/api/projects")
+def create_project(request: ProjectCreateRequest) -> dict:
+    name = _safe_name(request.name)
+    target = (DATA_ROOT.resolve() / name).resolve()
+    if not _is_relative_to(target, DATA_ROOT.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid project")
+    try:
+        target.mkdir(parents=False, exist_ok=False)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=f"Project already exists: {name}") from exc
+    return {"project": name}
+
+
+@app.post("/api/files/folder")
+def create_folder(request: FolderCreateRequest) -> dict:
+    project = ensure_project(request.project)
+    parent = _safe_project_path(project, request.path)
+    if not parent.exists() or not parent.is_dir():
+        raise HTTPException(status_code=404, detail="Parent folder not found")
+    name = _safe_name(request.name)
+    target = (parent / name).resolve()
+    if not _is_relative_to(target, (DATA_ROOT.resolve() / project).resolve()):
+        raise HTTPException(status_code=400, detail="Invalid folder")
+    try:
+        target.mkdir(parents=False, exist_ok=False)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=f"Folder already exists: {name}") from exc
+    return {"path": _relative_to_project(project, target)}
+
+
+@app.post("/api/files/upload")
+def upload_files(
+    project: str = Form(...),
+    path: str = Form(""),
+    files: list[UploadFile] = File(...),
+) -> dict:
+    project = ensure_project(project)
+    target_dir = _safe_project_path(project, path)
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Upload folder not found")
+    uploaded = []
+    for upload in files:
+        filename = _safe_name(upload.filename or "")
+        target = (target_dir / filename).resolve()
+        if not _is_relative_to(target, (DATA_ROOT.resolve() / project).resolve()):
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {filename}")
+        with target.open("wb") as out:
+            shutil.copyfileobj(upload.file, out)
+        uploaded.append({"name": filename, "path": _relative_to_project(project, target)})
+    return {"uploaded": uploaded}
 
 
 @app.post("/api/ask")

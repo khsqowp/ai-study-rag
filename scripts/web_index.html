@@ -324,6 +324,92 @@
         margin-top: 2px;
       }
 
+      /* ── File browser ── */
+      .file-card {
+        margin-top: 16px;
+        padding: 20px;
+      }
+      .file-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .file-actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .input {
+        width: 100%;
+        border: 1px solid var(--line1);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font: inherit;
+        font-size: 14px;
+        color: var(--label1);
+        outline: none;
+      }
+      .input:focus { border-color: var(--blue); }
+      .file-path {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        margin-bottom: 8px;
+        color: var(--label3);
+        font-size: 12px;
+      }
+      .file-up {
+        border: 0;
+        background: var(--fill1);
+        color: var(--label2);
+        border-radius: 8px;
+        padding: 5px 9px;
+        cursor: pointer;
+      }
+      .file-up:disabled { opacity: 0.45; cursor: default; }
+      .file-list {
+        border-top: 1px solid var(--line1);
+        max-height: 260px;
+        overflow: auto;
+      }
+      .file-row {
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        min-height: 42px;
+        border-bottom: 1px solid var(--line1);
+        color: var(--label2);
+        font-size: 13px;
+      }
+      .file-row button {
+        min-width: 0;
+        border: 0;
+        background: none;
+        color: inherit;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 0;
+      }
+      .file-row.unsupported { color: var(--label4); }
+      .file-meta {
+        color: var(--label4);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .file-empty {
+        padding: 14px 0;
+        color: var(--label4);
+        font-size: 13px;
+      }
+
       /* ── Cache banner ── */
       .cache-banner {
         display: flex;
@@ -428,6 +514,28 @@
               <button class="btn btn-primary" id="ask">질문하기</button>
             </div>
           </div>
+          <div class="card file-card">
+            <div class="section-label">파일</div>
+            <div class="file-toolbar">
+              <input class="input" id="newProjectName" placeholder="새 프로젝트 이름" />
+              <button class="btn btn-secondary" id="createProject">프로젝트 생성</button>
+            </div>
+            <div class="file-path">
+              <button class="file-up" id="folderUp">상위</button>
+              <span id="filePath">/</span>
+            </div>
+            <div class="file-list" id="fileList">
+              <div class="file-empty">프로젝트를 선택하세요.</div>
+            </div>
+            <div class="file-actions">
+              <input class="input" id="newFolderName" placeholder="새 폴더 이름" />
+              <button class="btn btn-secondary" id="createFolder">폴더 생성</button>
+            </div>
+            <div class="file-actions">
+              <input class="input" id="uploadFiles" type="file" multiple />
+              <button class="btn btn-secondary" id="uploadBtn">업로드</button>
+            </div>
+          </div>
           <div class="card" style="margin-top: 16px;">
             <div class="answer-wrap" id="answer">
               <span class="answer-placeholder">답변이 여기에 표시됩니다.</span>
@@ -454,18 +562,39 @@
       const reindexBtn = document.querySelector("#reindex");
       const webSearchEl = document.querySelector("#webSearch");
       const webSearchLabel = document.querySelector("#webSearchLabel");
+      const fileListEl = document.querySelector("#fileList");
+      const filePathEl = document.querySelector("#filePath");
+      const folderUpBtn = document.querySelector("#folderUp");
+      const newProjectNameEl = document.querySelector("#newProjectName");
+      const createProjectBtn = document.querySelector("#createProject");
+      const newFolderNameEl = document.querySelector("#newFolderName");
+      const createFolderBtn = document.querySelector("#createFolder");
+      const uploadFilesEl = document.querySelector("#uploadFiles");
+      const uploadBtn = document.querySelector("#uploadBtn");
       webSearchEl.addEventListener("change", () => {
         webSearchLabel.classList.toggle("active", webSearchEl.checked);
       });
 
       let currentProject = "";
+      let currentPath = "";
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
 
       function setProject(name) {
         currentProject = name;
+        currentPath = "";
         chipsEl.querySelectorAll(".chip").forEach((c) => {
           c.classList.toggle("active", c.dataset.project === name);
         });
         refreshStatus();
+        refreshFiles();
       }
 
       async function refreshStatus() {
@@ -491,11 +620,138 @@
                 c.classList.toggle("active", c.dataset.project === data.project);
               });
             }
-            if (!currentProject) currentProject = data.project;
+            if (!currentProject) {
+              currentProject = data.project;
+              currentPath = "";
+              refreshFiles();
+            }
           }
           statusEl.textContent = `${data.project} · ${data.points_count} chunks`;
         } catch {
           statusEl.textContent = "unavailable";
+        }
+      }
+
+      function formatBytes(size) {
+        if (size < 1024) return `${size} B`;
+        if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+        return `${(size / 1024 / 1024).toFixed(1)} MB`;
+      }
+
+      function parentPath(path) {
+        const parts = path.split("/").filter(Boolean);
+        parts.pop();
+        return parts.join("/");
+      }
+
+      async function refreshFiles() {
+        if (!currentProject) {
+          filePathEl.textContent = "/";
+          fileListEl.innerHTML = '<div class="file-empty">프로젝트를 선택하세요.</div>';
+          return;
+        }
+        filePathEl.textContent = `/${currentProject}${currentPath ? "/" + currentPath : ""}`;
+        folderUpBtn.disabled = !currentPath;
+        try {
+          const res = await fetch(`/api/files?project=${encodeURIComponent(currentProject)}&path=${encodeURIComponent(currentPath)}`);
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "request failed");
+          if (!data.items.length) {
+            fileListEl.innerHTML = '<div class="file-empty">비어 있는 폴더입니다.</div>';
+            return;
+          }
+          fileListEl.innerHTML = data.items.map((item) => {
+            const icon = item.type === "directory" ? "📁" : "📄";
+            const meta = item.type === "directory" ? "폴더" : formatBytes(item.size);
+            const cls = `file-row${item.supported ? "" : " unsupported"}`;
+            const name = escapeHtml(item.name);
+            const path = escapeHtml(item.path);
+            if (item.type === "directory") {
+              return `<div class="${cls}">
+                <span>${icon}</span>
+                <button data-path="${path}" class="folder-link">${name}</button>
+                <span class="file-meta">${meta}</span>
+              </div>`;
+            }
+            return `<div class="${cls}">
+              <span>${icon}</span>
+              <span title="${name}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}</span>
+              <span class="file-meta">${meta}</span>
+            </div>`;
+          }).join("");
+          fileListEl.querySelectorAll(".folder-link").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              currentPath = btn.dataset.path || "";
+              refreshFiles();
+            });
+          });
+        } catch (err) {
+          fileListEl.innerHTML = `<div class="file-empty error">${escapeHtml(err.message)}</div>`;
+        }
+      }
+
+      async function createProject() {
+        const name = newProjectNameEl.value.trim();
+        if (!name) return;
+        createProjectBtn.disabled = true;
+        try {
+          const res = await fetch("/api/projects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "request failed");
+          newProjectNameEl.value = "";
+          currentProject = data.project;
+          currentPath = "";
+          await refreshStatus();
+          await refreshFiles();
+        } catch (err) {
+          fileListEl.innerHTML = `<div class="file-empty error">${escapeHtml(err.message)}</div>`;
+        } finally {
+          createProjectBtn.disabled = false;
+        }
+      }
+
+      async function createFolder() {
+        const name = newFolderNameEl.value.trim();
+        if (!name || !currentProject) return;
+        createFolderBtn.disabled = true;
+        try {
+          const res = await fetch("/api/files/folder", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ project: currentProject, path: currentPath, name }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "request failed");
+          newFolderNameEl.value = "";
+          await refreshFiles();
+        } catch (err) {
+          fileListEl.innerHTML = `<div class="file-empty error">${escapeHtml(err.message)}</div>`;
+        } finally {
+          createFolderBtn.disabled = false;
+        }
+      }
+
+      async function uploadFiles() {
+        if (!currentProject || !uploadFilesEl.files.length) return;
+        uploadBtn.disabled = true;
+        const body = new FormData();
+        body.append("project", currentProject);
+        body.append("path", currentPath);
+        for (const file of uploadFilesEl.files) body.append("files", file);
+        try {
+          const res = await fetch("/api/files/upload", { method: "POST", body });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "request failed");
+          uploadFilesEl.value = "";
+          await refreshFiles();
+        } catch (err) {
+          fileListEl.innerHTML = `<div class="file-empty error">${escapeHtml(err.message)}</div>`;
+        } finally {
+          uploadBtn.disabled = false;
         }
       }
 
@@ -765,6 +1021,13 @@
       });
       askBtn.addEventListener("click", ask);
       reindexBtn.addEventListener("click", reindex);
+      folderUpBtn.addEventListener("click", () => {
+        currentPath = parentPath(currentPath);
+        refreshFiles();
+      });
+      createProjectBtn.addEventListener("click", createProject);
+      createFolderBtn.addEventListener("click", createFolder);
+      uploadBtn.addEventListener("click", uploadFiles);
       refreshStatus().catch(() => {
         statusEl.textContent = "unavailable";
       });
