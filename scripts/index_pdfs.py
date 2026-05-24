@@ -27,9 +27,13 @@ from qdrant_client.models import (
 )
 from tqdm import tqdm
 
+from settings import get_data_root
 
-DATA_ROOT = Path("/sandbox/data").resolve()
 CACHE_ROOT = Path("/sandbox/cache").resolve()
+
+
+def data_root() -> Path:
+    return get_data_root()
 
 
 def _emit(event: dict) -> None:
@@ -75,9 +79,11 @@ def collection_for_project(project: str) -> str:
 
 def safe_source_path(path: Path) -> str:
     resolved = path.resolve()
-    if not str(resolved).startswith(str(DATA_ROOT)):
-        raise ValueError(f"Refusing to index outside /sandbox/data: {path}")
-    return str(resolved.relative_to(DATA_ROOT))
+    root = data_root()
+    try:
+        return str(resolved.relative_to(root))
+    except ValueError as exc:
+        raise ValueError(f"Refusing to index outside data root {root}: {path}") from exc
 
 
 def point_id(source: str, locator: str, chunk_idx: int, text: str) -> str:
@@ -747,9 +753,14 @@ def main() -> None:
     parser.add_argument("--skip-unchanged", action="store_true")
     args = parser.parse_args()
 
-    project_dir = (DATA_ROOT / args.project).resolve()
-    if not str(project_dir).startswith(str(DATA_ROOT)) or not project_dir.is_dir():
-        raise SystemExit(f"Project directory not found under /sandbox/data: {args.project}")
+    root = data_root()
+    project_dir = (root / args.project).resolve()
+    try:
+        project_dir.relative_to(root)
+    except ValueError:
+        raise SystemExit(f"Project directory not found under data root {root}: {args.project}")
+    if not project_dir.is_dir():
+        raise SystemExit(f"Project directory not found under data root {root}: {args.project}")
 
     qdrant_url = os.environ["QDRANT_URL"]
     collection = collection_for_project(args.project)

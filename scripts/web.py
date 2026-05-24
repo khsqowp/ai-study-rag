@@ -13,6 +13,7 @@ from qdrant_client import QdrantClient
 
 from answer import build_prompt, call_gemini, retrieve, stream_gemini
 from index_pdfs import SUPPORTED_EXTENSIONS, collection_for_project
+from settings import get_data_root, set_data_root
 
 
 _jobs: dict[str, dict] = {}
@@ -45,7 +46,8 @@ class FolderCreateRequest(BaseModel):
     name: str
 
 
-DATA_ROOT = Path("/sandbox/data")
+class DataRootRequest(BaseModel):
+    path: str
 
 
 def _is_relative_to(path: Path, base: Path) -> bool:
@@ -65,7 +67,7 @@ def _safe_name(name: str) -> str:
 
 def _safe_project_path(project: str, relative_path: str = "") -> Path:
     project = _safe_name(project)
-    root = DATA_ROOT.resolve()
+    root = get_data_root()
     base = (root / project).resolve()
     if not _is_relative_to(base, root):
         raise HTTPException(status_code=400, detail="Invalid project")
@@ -77,13 +79,13 @@ def _safe_project_path(project: str, relative_path: str = "") -> Path:
 
 
 def _relative_to_project(project: str, path: Path) -> str:
-    base = (DATA_ROOT.resolve() / project).resolve()
+    base = (get_data_root() / project).resolve()
     rel = path.resolve().relative_to(base)
     return "" if str(rel) == "." else str(rel)
 
 
 def project_names() -> list[str]:
-    root = DATA_ROOT
+    root = get_data_root()
     if not root.exists():
         return []
     return sorted(path.name for path in root.iterdir() if path.is_dir())
@@ -104,7 +106,14 @@ def index() -> str:
 def status(project: str = "") -> dict:
     all_projects = project_names()
     if not all_projects:
-        return {"project": None, "collection": None, "points_count": 0, "status": "no_projects", "projects": []}
+        return {
+            "project": None,
+            "collection": None,
+            "points_count": 0,
+            "status": "no_projects",
+            "projects": [],
+            "data_root": str(get_data_root()),
+        }
     if not project or project not in all_projects:
         project = all_projects[0]
     collection = collection_for_project(project)
@@ -116,6 +125,7 @@ def status(project: str = "") -> dict:
             "points_count": 0,
             "status": "missing",
             "projects": all_projects,
+            "data_root": str(get_data_root()),
         }
     collection_info = client.get_collection(collection)
     return {
@@ -124,7 +134,22 @@ def status(project: str = "") -> dict:
         "points_count": collection_info.points_count,
         "status": str(collection_info.status),
         "projects": all_projects,
+        "data_root": str(get_data_root()),
     }
+
+
+@app.get("/api/settings")
+def settings() -> dict:
+    return {"data_root": str(get_data_root()), "projects": project_names()}
+
+
+@app.post("/api/settings/data-root")
+def update_data_root(request: DataRootRequest) -> dict:
+    try:
+        root = set_data_root(request.path)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"data_root": str(root), "projects": project_names()}
 
 
 @app.get("/api/files")
@@ -159,8 +184,9 @@ def list_files(project: str, path: str = "") -> dict:
 @app.post("/api/projects")
 def create_project(request: ProjectCreateRequest) -> dict:
     name = _safe_name(request.name)
-    target = (DATA_ROOT.resolve() / name).resolve()
-    if not _is_relative_to(target, DATA_ROOT.resolve()):
+    root = get_data_root()
+    target = (root / name).resolve()
+    if not _is_relative_to(target, root):
         raise HTTPException(status_code=400, detail="Invalid project")
     try:
         target.mkdir(parents=False, exist_ok=False)
@@ -177,7 +203,7 @@ def create_folder(request: FolderCreateRequest) -> dict:
         raise HTTPException(status_code=404, detail="Parent folder not found")
     name = _safe_name(request.name)
     target = (parent / name).resolve()
-    if not _is_relative_to(target, (DATA_ROOT.resolve() / project).resolve()):
+    if not _is_relative_to(target, (get_data_root() / project).resolve()):
         raise HTTPException(status_code=400, detail="Invalid folder")
     try:
         target.mkdir(parents=False, exist_ok=False)
@@ -200,7 +226,7 @@ def upload_files(
     for upload in files:
         filename = _safe_name(upload.filename or "")
         target = (target_dir / filename).resolve()
-        if not _is_relative_to(target, (DATA_ROOT.resolve() / project).resolve()):
+        if not _is_relative_to(target, (get_data_root() / project).resolve()):
             raise HTTPException(status_code=400, detail=f"Invalid filename: {filename}")
         with target.open("wb") as out:
             shutil.copyfileobj(upload.file, out)

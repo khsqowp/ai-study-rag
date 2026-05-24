@@ -517,6 +517,10 @@
           <div class="card file-card">
             <div class="section-label">파일</div>
             <div class="file-toolbar">
+              <input class="input" id="dataRoot" placeholder="/sandbox/data" />
+              <button class="btn btn-secondary" id="updateRoot">루트 변경</button>
+            </div>
+            <div class="file-toolbar">
               <input class="input" id="newProjectName" placeholder="새 프로젝트 이름" />
               <button class="btn btn-secondary" id="createProject">프로젝트 생성</button>
             </div>
@@ -565,6 +569,8 @@
       const fileListEl = document.querySelector("#fileList");
       const filePathEl = document.querySelector("#filePath");
       const folderUpBtn = document.querySelector("#folderUp");
+      const dataRootEl = document.querySelector("#dataRoot");
+      const updateRootBtn = document.querySelector("#updateRoot");
       const newProjectNameEl = document.querySelector("#newProjectName");
       const createProjectBtn = document.querySelector("#createProject");
       const newFolderNameEl = document.querySelector("#newFolderName");
@@ -602,6 +608,7 @@
         try {
           const res = await fetch(`/api/status?project=${encodeURIComponent(project)}`);
           const data = await res.json();
+          if (data.data_root) dataRootEl.value = data.data_root;
           if (data.projects) {
             const prev = Array.from(chipsEl.querySelectorAll(".chip")).map((c) => c.dataset.project).join(",");
             const next = data.projects.join(",");
@@ -620,13 +627,19 @@
                 c.classList.toggle("active", c.dataset.project === data.project);
               });
             }
-            if (!currentProject) {
+            if (!data.project) {
+              currentProject = "";
+              currentPath = "";
+              refreshFiles();
+            } else if (!currentProject) {
               currentProject = data.project;
               currentPath = "";
               refreshFiles();
             }
           }
-          statusEl.textContent = `${data.project} · ${data.points_count} chunks`;
+          statusEl.textContent = data.project
+            ? `${data.project} · ${data.points_count} chunks`
+            : "프로젝트 없음";
         } catch {
           statusEl.textContent = "unavailable";
         }
@@ -711,6 +724,30 @@
           fileListEl.innerHTML = `<div class="file-empty error">${escapeHtml(err.message)}</div>`;
         } finally {
           createProjectBtn.disabled = false;
+        }
+      }
+
+      async function updateRoot() {
+        const path = dataRootEl.value.trim();
+        if (!path) return;
+        updateRootBtn.disabled = true;
+        try {
+          const res = await fetch("/api/settings/data-root", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "request failed");
+          dataRootEl.value = data.data_root;
+          currentProject = "";
+          currentPath = "";
+          await refreshStatus();
+          await refreshFiles();
+        } catch (err) {
+          fileListEl.innerHTML = `<div class="file-empty error">${escapeHtml(err.message)}</div>`;
+        } finally {
+          updateRootBtn.disabled = false;
         }
       }
 
@@ -1021,6 +1058,7 @@
       });
       askBtn.addEventListener("click", ask);
       reindexBtn.addEventListener("click", reindex);
+      updateRootBtn.addEventListener("click", updateRoot);
       folderUpBtn.addEventListener("click", () => {
         currentPath = parentPath(currentPath);
         refreshFiles();

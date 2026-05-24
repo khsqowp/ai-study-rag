@@ -51,8 +51,9 @@ services:
       STT_ALIGN_TOLERANCE: ${STT_ALIGN_TOLERANCE:-0.5}
       STT_SIMILARITY_THRESHOLD: ${STT_SIMILARITY_THRESHOLD:-0.6}
       PROJECT_NAME: ${PROJECT_NAME:-inbox}
+      DATA_ROOT: ${DATA_ROOT:-/sandbox/data}
     volumes:
-      - ./data:/sandbox/data
+      - ${DATA_ROOT_HOST:-./data}:${DATA_ROOT:-/sandbox/data}
       - ./config:/sandbox/config:ro
       - ./vectordb:/sandbox/vectordb
       - ./cache:/sandbox/cache
@@ -101,9 +102,10 @@ services:
       STT_ALIGN_TOLERANCE: ${STT_ALIGN_TOLERANCE:-0.5}
       STT_SIMILARITY_THRESHOLD: ${STT_SIMILARITY_THRESHOLD:-0.6}
       PROJECT_NAME: ${PROJECT_NAME:-*}
+      DATA_ROOT: ${DATA_ROOT:-/sandbox/data}
       WATCH_INTERVAL_SECONDS: ${WATCH_INTERVAL_SECONDS:-120}
     volumes:
-      - ./data:/sandbox/data:ro
+      - ${DATA_ROOT_HOST:-./data}:${DATA_ROOT:-/sandbox/data}:ro
       - ./config:/sandbox/config:ro
       - ./vectordb:/sandbox/vectordb
       - ./cache:/sandbox/cache
@@ -155,8 +157,9 @@ services:
       STT_ALIGN_TOLERANCE: ${STT_ALIGN_TOLERANCE:-0.5}
       STT_SIMILARITY_THRESHOLD: ${STT_SIMILARITY_THRESHOLD:-0.6}
       PROJECT_NAME: ${PROJECT_NAME:-inbox}
+      DATA_ROOT: ${DATA_ROOT:-/sandbox/data}
     volumes:
-      - ./data:/sandbox/data:ro
+      - ${DATA_ROOT_HOST:-./data}:${DATA_ROOT:-/sandbox/data}:ro
       - ./config:/sandbox/config:ro
       - ./vectordb:/sandbox/vectordb
       - ./cache:/sandbox/cache

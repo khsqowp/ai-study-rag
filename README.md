@@ -47,6 +47,15 @@ GEMINI_API_KEY=your_api_key_here
 
 `.env`, `data/`, `cache/`, `vectordb/`, `workspace/`는 개인 정보와 생성 데이터가 들어갈 수 있어 Git에 올리지 않습니다.
 
+자료 루트를 다른 호스트 폴더로 쓰려면 `.env`에서 `DATA_ROOT_HOST`를 바꾼 뒤 컨테이너를 재시작합니다.
+
+```text
+DATA_ROOT_HOST=/Volumes/SSD T7/my-study-data
+DATA_ROOT=/sandbox/data
+```
+
+웹 UI의 파일 패널에서도 루트 경로를 바꿀 수 있습니다. 이 경로는 컨테이너 안에서 접근 가능한 경로여야 하므로, 호스트의 임의 경로는 먼저 Docker 볼륨으로 마운트되어 있어야 합니다.
+
 ## 실행
 
 ```bash
