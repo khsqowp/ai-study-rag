@@ -1,12 +1,15 @@
 import json
+import hashlib
 import os
 import shutil
 import subprocess
 import threading
+import time
+import unicodedata
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
@@ -18,6 +21,7 @@ from settings import get_data_root, set_data_root
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+ANSWER_CACHE_ROOT = Path(os.environ.get("ANSWER_CACHE_ROOT", "/sandbox/workspace/answer_cache"))
 
 
 app = FastAPI(title="AI Sandbox RAG")
@@ -48,6 +52,77 @@ class FolderCreateRequest(BaseModel):
 
 class DataRootRequest(BaseModel):
     path: str
+
+
+def _answer_cache_enabled() -> bool:
+    return os.environ.get("ENABLE_ANSWER_CACHE", "1") == "1"
+
+
+def _answer_cache_ttl_seconds() -> int:
+    return int(os.environ.get("ANSWER_CACHE_TTL_SECONDS", str(7 * 24 * 60 * 60)))
+
+
+def _answer_cache_fingerprint(contexts: list[dict]) -> str:
+    normalized = [
+        {
+            "source": item.get("source"),
+            "locator": item.get("locator"),
+            "page": item.get("page"),
+            "text": item.get("text", ""),
+        }
+        for item in contexts
+    ]
+    raw = json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _answer_cache_key(project: str, query: str, limit: int, web_search: bool, contexts: list[dict]) -> str:
+    raw = json.dumps(
+        {
+            "version": 1,
+            "project": project,
+            "query": query,
+            "limit": limit,
+            "web_search": web_search,
+            "contexts": _answer_cache_fingerprint(contexts),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _answer_cache_path(key: str) -> Path:
+    return ANSWER_CACHE_ROOT / f"{key}.json"
+
+
+def _read_answer_cache(key: str) -> dict | None:
+    if not _answer_cache_enabled():
+        return None
+    path = _answer_cache_path(key)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    created_at = float(data.get("created_at", 0))
+    if time.time() - created_at > _answer_cache_ttl_seconds():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+    return data
+
+
+def _write_answer_cache(key: str, data: dict) -> None:
+    if not _answer_cache_enabled():
+        return
+    ANSWER_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    path = _answer_cache_path(key)
+    temp_path = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    payload = {**data, "created_at": time.time()}
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
 
 
 def _is_relative_to(path: Path, base: Path) -> bool:
@@ -91,10 +166,25 @@ def project_names() -> list[str]:
     return sorted(path.name for path in root.iterdir() if path.is_dir())
 
 
+def _project_key(project: str) -> str:
+    return unicodedata.normalize("NFC", project)
+
+
 def ensure_project(project: str) -> str:
-    if project not in project_names():
-        raise HTTPException(status_code=404, detail=f"Unknown project: {project}")
-    return project
+    projects = project_names()
+    if project in projects:
+        return project
+    normalized = _project_key(project)
+    for name in projects:
+        if _project_key(name) == normalized:
+            return name
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "message": f"Unknown project: {project}",
+            "available_projects": projects,
+        },
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -235,7 +325,7 @@ def upload_files(
 
 
 @app.post("/api/ask")
-def ask(request: AskRequest) -> dict:
+def ask(request: AskRequest, x_gemini_api_key: str | None = Header(default=None)) -> dict:
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
@@ -245,21 +335,33 @@ def ask(request: AskRequest) -> dict:
     if not contexts:
         raise HTTPException(status_code=404, detail="No relevant context found")
 
+    cache_key = _answer_cache_key(project, query, request.limit, request.web_search, contexts)
+    cached = _read_answer_cache(cache_key)
+    if cached is not None:
+        return {
+            "answer": cached.get("answer", ""),
+            "contexts": contexts if request.show_context else [],
+            "web_sources": cached.get("web_sources", []),
+            "cached": True,
+        }
+
     prompt = build_prompt(query, contexts, request.web_search)
     try:
-        answer, web_sources = call_gemini(prompt, request.web_search)
+        answer, web_sources = call_gemini(prompt, request.web_search, x_gemini_api_key)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    _write_answer_cache(cache_key, {"answer": answer, "web_sources": web_sources})
 
     return {
         "answer": answer,
         "contexts": contexts if request.show_context else [],
         "web_sources": web_sources,
+        "cached": False,
     }
 
 
 @app.post("/api/ask/stream")
-def ask_stream(request: AskRequest) -> StreamingResponse:
+def ask_stream(request: AskRequest, x_gemini_api_key: str | None = Header(default=None)) -> StreamingResponse:
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
@@ -269,16 +371,33 @@ def ask_stream(request: AskRequest) -> StreamingResponse:
     if not contexts:
         raise HTTPException(status_code=404, detail="No relevant context found")
 
+    cache_key = _answer_cache_key(project, query, request.limit, request.web_search, contexts)
     prompt = build_prompt(query, contexts, request.web_search)
 
     def generate():
         yield f"data: {json.dumps({'type': 'contexts', 'contexts': contexts})}\n\n"
+        cached = _read_answer_cache(cache_key)
+        if cached is not None:
+            yield f"data: {json.dumps({'type': 'cache', 'cached': True})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'text': cached.get('answer', '')})}\n\n"
+            web_sources = cached.get("web_sources", [])
+            if web_sources:
+                yield f"data: {json.dumps({'type': 'web_sources', 'sources': web_sources})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            return
+        answer_parts: list[str] = []
+        web_sources: list[dict] = []
         try:
-            for event in stream_gemini(prompt, request.web_search):
+            for event in stream_gemini(prompt, request.web_search, x_gemini_api_key):
                 if event["type"] == "token":
+                    answer_parts.append(event["text"])
                     yield f"data: {json.dumps({'type': 'token', 'text': event['text']})}\n\n"
                 elif event["type"] == "grounding":
+                    web_sources = event["sources"]
                     yield f"data: {json.dumps({'type': 'web_sources', 'sources': event['sources']})}\n\n"
+            answer = "".join(answer_parts)
+            if answer:
+                _write_answer_cache(cache_key, {"answer": answer, "web_sources": web_sources})
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
