@@ -45,6 +45,7 @@ from index_pdfs import (  # noqa: E402
     _confidence_tier,
     _merge_into_events,
     _cluster_by_similarity,
+    iter_batches,
     vote_and_merge,
 )
 
@@ -189,6 +190,18 @@ def test_vote_and_merge_best_logprob_selected() -> None:
     print("test_vote_and_merge_best_logprob_selected PASSED")
 
 
+def test_iter_batches() -> None:
+    batches = list(iter_batches([1, 2, 3, 4, 5], 2))
+    assert batches == [[1, 2], [3, 4], [5]]
+    try:
+        list(iter_batches([1], 0))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("iter_batches should reject non-positive batch sizes")
+    print("test_iter_batches PASSED")
+
+
 if __name__ == "__main__":
     test_text_similarity()
     test_confidence_tier()
@@ -201,4 +214,5 @@ if __name__ == "__main__":
     test_single_model_backward_compat()
     test_vote_and_merge_empty()
     test_vote_and_merge_best_logprob_selected()
+    test_iter_batches()
     print("\nAll tests PASSED")
