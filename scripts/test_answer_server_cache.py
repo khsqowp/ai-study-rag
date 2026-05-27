@@ -68,7 +68,7 @@ sys.modules["index_pdfs"].collection_for_project = lambda project: f"{project}_d
 sys.modules["settings"].get_data_root = lambda: cache_dir.name  # type: ignore[attr-defined]
 sys.modules["settings"].set_data_root = lambda path: path  # type: ignore[attr-defined]
 
-from web import _answer_cache_key, _read_answer_cache, _write_answer_cache  # noqa: E402
+from web import _answer_cache_key, _read_answer_cache, _sse_event, _write_answer_cache  # noqa: E402
 
 
 def test_answer_cache_key_changes_with_context_text() -> None:
@@ -91,8 +91,19 @@ def test_answer_cache_roundtrip() -> None:
     print("test_answer_cache_roundtrip PASSED")
 
 
+def test_sse_event_formats_single_json_event() -> None:
+    event = _sse_event({"type": "token", "text": "안녕하세요"})
+
+    assert event.startswith("data: ")
+    assert event.endswith("\n\n")
+    assert '"type": "token"' in event
+    assert "안녕하세요" in event
+    print("test_sse_event_formats_single_json_event PASSED")
+
+
 if __name__ == "__main__":
     test_answer_cache_key_changes_with_context_text()
     test_answer_cache_roundtrip()
+    test_sse_event_formats_single_json_event()
     cache_dir.cleanup()
     print("\nAll tests PASSED")

@@ -583,6 +583,7 @@
 
       let currentProject = "";
       let currentPath = "";
+      let activeAskController = null;
 
       function escapeHtml(value) {
         return String(value ?? "")
@@ -824,30 +825,30 @@
       }
 
       // ── Cache helpers ────────────────────────────────────────────
-      const CACHE_KEY_PREFIX = "rag_cache_v1";
+      const CACHE_KEY_PREFIX = "rag_cache_v2";
       const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7일
 
-      function cacheKey(project, query) {
-        return `${CACHE_KEY_PREFIX}:${project}:${query.trim().toLowerCase()}`;
+      function cacheKey(project, query, webSearch) {
+        return `${CACHE_KEY_PREFIX}:${project}:${webSearch ? "web" : "local"}:${query.trim().toLowerCase()}`;
       }
 
-      function cacheGet(project, query) {
+      function cacheGet(project, query, webSearch) {
         try {
-          const raw = localStorage.getItem(cacheKey(project, query));
+          const raw = localStorage.getItem(cacheKey(project, query, webSearch));
           if (!raw) return null;
           const entry = JSON.parse(raw);
           if (Date.now() - entry.ts > CACHE_MAX_AGE_MS) {
-            localStorage.removeItem(cacheKey(project, query));
+            localStorage.removeItem(cacheKey(project, query, webSearch));
             return null;
           }
           return entry;
         } catch { return null; }
       }
 
-      function cacheSet(project, query, answer, contexts) {
+      function cacheSet(project, query, webSearch, answer, contexts, webSources) {
         try {
-          localStorage.setItem(cacheKey(project, query), JSON.stringify({
-            answer, contexts, ts: Date.now(), query: query.trim(),
+          localStorage.setItem(cacheKey(project, query, webSearch), JSON.stringify({
+            answer, contexts, webSources, ts: Date.now(), query: query.trim(),
           }));
         } catch { /* storage full 무시 */ }
       }
@@ -873,15 +874,18 @@
           ask(true);
         });
         renderContexts(entry.contexts || []);
+        renderWebSources(entry.webSources || [], answerWrap);
       }
       // ─────────────────────────────────────────────────────────────
 
       async function ask(forceRefresh = false) {
+        if (askBtn.disabled) return;
         const query = queryEl.value.trim();
         if (!query) return;
+        const useWebSearch = webSearchEl.checked;
 
         if (!forceRefresh) {
-          const cached = cacheGet(currentProject, query);
+          const cached = cacheGet(currentProject, query, useWebSearch);
           if (cached) {
             showCachedAnswer(cached, query);
             return;
@@ -889,7 +893,7 @@
         }
 
         askBtn.disabled = true;
-        const useWebSearch = webSearchEl.checked;
+        activeAskController = new AbortController();
         const answerWrap = document.querySelector(".answer-wrap");
         answerWrap.innerHTML = '<span class="answer-placeholder">답변 생성 중...</span>';
         contextsEl.innerHTML = '<div class="ctx-empty">검색 중...</div>';
@@ -901,6 +905,7 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ query, project: currentProject, limit: 12, show_context: true, web_search: useWebSearch }),
+            signal: activeAskController.signal,
           });
           if (!res.ok) {
             const data = await res.json();
@@ -917,10 +922,17 @@
             buffer = lines.pop();
             for (const line of lines) {
               if (!line.startsWith("data: ")) continue;
-              const data = JSON.parse(line.slice(6));
+              let data;
+              try {
+                data = JSON.parse(line.slice(6));
+              } catch {
+                continue;
+              }
               if (data.type === "contexts") {
                 lastContexts = data.contexts || [];
                 renderContexts(lastContexts);
+              } else if (data.type === "cache") {
+                answerWrap.innerHTML = '<span class="answer-placeholder">캐시된 답변을 불러오는 중...</span>';
               } else if (data.type === "token") {
                 fullText += data.text;
                 answerWrap.innerHTML = '<div style="padding:20px"><div class="answer">' + marked.parse(fullText) + "</div></div>";
@@ -932,12 +944,14 @@
               }
             }
           }
-          if (fullText) cacheSet(currentProject, query, fullText, lastContexts);
+          if (fullText) cacheSet(currentProject, query, useWebSearch, fullText, lastContexts, lastWebSources);
         } catch (err) {
+          if (err.name === "AbortError") return;
           answerWrap.innerHTML = `<span class="answer-placeholder error" style="padding:20px;display:block">${err.message}</span>`;
           contextsEl.innerHTML = '<div class="ctx-empty">오류로 검색 근거를 표시하지 못했습니다.</div>';
         } finally {
           askBtn.disabled = false;
+          activeAskController = null;
         }
       }
 

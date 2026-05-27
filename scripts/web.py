@@ -125,6 +125,10 @@ def _write_answer_cache(key: str, data: dict) -> None:
     temp_path.replace(path)
 
 
+def _sse_event(data: dict) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 def _is_relative_to(path: Path, base: Path) -> bool:
     try:
         path.relative_to(base)
@@ -375,15 +379,15 @@ def ask_stream(request: AskRequest, x_gemini_api_key: str | None = Header(defaul
     prompt = build_prompt(query, contexts, request.web_search)
 
     def generate():
-        yield f"data: {json.dumps({'type': 'contexts', 'contexts': contexts})}\n\n"
+        yield _sse_event({"type": "contexts", "contexts": contexts})
         cached = _read_answer_cache(cache_key)
         if cached is not None:
-            yield f"data: {json.dumps({'type': 'cache', 'cached': True})}\n\n"
-            yield f"data: {json.dumps({'type': 'token', 'text': cached.get('answer', '')})}\n\n"
+            yield _sse_event({"type": "cache", "cached": True})
+            yield _sse_event({"type": "token", "text": cached.get("answer", "")})
             web_sources = cached.get("web_sources", [])
             if web_sources:
-                yield f"data: {json.dumps({'type': 'web_sources', 'sources': web_sources})}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                yield _sse_event({"type": "web_sources", "sources": web_sources})
+            yield _sse_event({"type": "done"})
             return
         answer_parts: list[str] = []
         web_sources: list[dict] = []
@@ -391,18 +395,22 @@ def ask_stream(request: AskRequest, x_gemini_api_key: str | None = Header(defaul
             for event in stream_gemini(prompt, request.web_search, x_gemini_api_key):
                 if event["type"] == "token":
                     answer_parts.append(event["text"])
-                    yield f"data: {json.dumps({'type': 'token', 'text': event['text']})}\n\n"
+                    yield _sse_event({"type": "token", "text": event["text"]})
                 elif event["type"] == "grounding":
                     web_sources = event["sources"]
-                    yield f"data: {json.dumps({'type': 'web_sources', 'sources': event['sources']})}\n\n"
+                    yield _sse_event({"type": "web_sources", "sources": event["sources"]})
             answer = "".join(answer_parts)
             if answer:
                 _write_answer_cache(cache_key, {"answer": answer, "web_sources": web_sources})
         except Exception as exc:
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            yield _sse_event({"type": "error", "detail": str(exc)})
+        yield _sse_event({"type": "done"})
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _run_reindex_job(job_id: str, project: str, recreate: bool) -> None:
