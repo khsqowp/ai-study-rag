@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/sandbox/cache/huggingface \
+    FASTEMBED_CACHE_PATH=/sandbox/cache/fastembed
+
+WORKDIR /sandbox
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.web.txt /tmp/requirements.web.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.web.txt
+
+CMD ["uvicorn", "web:app", "--app-dir", "/sandbox/scripts", "--host", "0.0.0.0", "--port", "8088"]

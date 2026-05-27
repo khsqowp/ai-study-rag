@@ -11,7 +11,7 @@ from fastembed import SparseTextEmbedding, TextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import Fusion, FusionQuery, Prefetch, SparseVector
 
-from index_pdfs import collection_for_project
+from project_utils import collection_for_project
 
 
 _sparse_embedder: SparseTextEmbedding | None = None

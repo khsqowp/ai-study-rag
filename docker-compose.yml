@@ -16,13 +16,14 @@ services:
   web:
     build:
       context: .
-      dockerfile: Dockerfile.rag
+      dockerfile: Dockerfile.web
     container_name: ai-sandbox-web
     restart: unless-stopped
     ports:
       - "127.0.0.1:8088:8088"
     environment:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      INDEXER_URL: ${INDEXER_URL:-http://indexer:8090}
       COLLECTION_NAME: ${COLLECTION_NAME:-inbox_docs}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
@@ -66,7 +67,60 @@ services:
     working_dir: /sandbox
     depends_on:
       - qdrant
+      - indexer
     command: ["uvicorn", "web:app", "--app-dir", "/sandbox/scripts", "--host", "0.0.0.0", "--port", "8088"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile.rag
+    container_name: ai-sandbox-indexer
+    restart: unless-stopped
+    environment:
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      COLLECTION_NAME: ${COLLECTION_NAME:-inbox_docs}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+      CHUNK_SIZE: ${CHUNK_SIZE:-1400}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+      MIN_CHUNK_CHARS: ${MIN_CHUNK_CHARS:-80}
+      INDEX_BATCH_SIZE: ${INDEX_BATCH_SIZE:-128}
+      ENABLE_OCR: ${ENABLE_OCR:-1}
+      OCR_LANG: ${OCR_LANG:-kor+eng}
+      OCR_MIN_TEXT_CHARS: ${OCR_MIN_TEXT_CHARS:-1}
+      ENABLE_STT: ${ENABLE_STT:-1}
+      STT_ENABLE_KOSPACING: ${STT_ENABLE_KOSPACING:-1}
+      STT_MODELS: ${STT_MODELS:-}
+      STT_MODEL: ${STT_MODEL:-small}
+      STT_DEVICE: ${STT_DEVICE:-cpu}
+      STT_COMPUTE_TYPE: ${STT_COMPUTE_TYPE:-int8}
+      STT_LANGUAGE: ${STT_LANGUAGE:-ko}
+      STT_CHUNK_SECONDS: ${STT_CHUNK_SECONDS:-180}
+      STT_BEAM_SIZE: ${STT_BEAM_SIZE:-10}
+      STT_TEMPERATURE: ${STT_TEMPERATURE:-0.0}
+      STT_COMPRESSION_RATIO_THRESHOLD: ${STT_COMPRESSION_RATIO_THRESHOLD:-2.2}
+      STT_INITIAL_PROMPT: ${STT_INITIAL_PROMPT:-다음은 한국어 음성입니다.}
+      STT_MIN_VOTES: ${STT_MIN_VOTES:-2}
+      STT_MIN_AVG_LOGPROB: ${STT_MIN_AVG_LOGPROB:--0.8}
+      STT_MAX_NO_SPEECH_PROB: ${STT_MAX_NO_SPEECH_PROB:-0.3}
+      STT_ALIGN_TOLERANCE: ${STT_ALIGN_TOLERANCE:-0.5}
+      STT_SIMILARITY_THRESHOLD: ${STT_SIMILARITY_THRESHOLD:-0.6}
+      PROJECT_NAME: ${PROJECT_NAME:-inbox}
+      DATA_ROOT: ${DATA_ROOT:-/sandbox/data}
+    volumes:
+      - ${DATA_ROOT_HOST:-./data}:${DATA_ROOT:-/sandbox/data}:ro
+      - ./config:/sandbox/config:ro
+      - ./vectordb:/sandbox/vectordb
+      - ./cache:/sandbox/cache
+      - ./workspace:/sandbox/workspace
+      - ./scripts:/sandbox/scripts:ro
+    working_dir: /sandbox
+    depends_on:
+      - qdrant
+    command: ["uvicorn", "indexer_api:app", "--app-dir", "/sandbox/scripts", "--host", "0.0.0.0", "--port", "8090"]
     security_opt:
       - no-new-privileges:true
     cap_drop:

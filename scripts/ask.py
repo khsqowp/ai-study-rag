@@ -5,7 +5,7 @@ import re
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 
-from index_pdfs import collection_for_project
+from project_utils import collection_for_project
 
 
 def query_terms(query: str) -> list[str]:
